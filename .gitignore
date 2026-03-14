@@ -18,6 +18,13 @@ build/
 *.db
 *.log
 local_settings.py
+staticfiles/
+media/
+
+# ---- Entornos virtuales ----
+venv/
+env/
+.venv/
 
 # ---- Celery ----
 celerybeat-schedule
