@@ -1,0 +1,24 @@
+# --- Framework Principal ---
+django>=4.2,<5.0
+djangorestframework
+django-cors-headers
+djangorestframework-simplejwt
+
+# --- Procesamiento Asíncrono ---
+celery>=5.3.0
+redis>=5.0.0
+
+# --- Base de Datos ---
+psycopg2-binary
+
+# --- Scraping ---
+requests
+beautifulsoup4
+lxml
+user-agents
+# AGREGADO: Necesario para el scraper de navegador real
+playwright
+
+# --- Utilidades ---
+python-dotenv
+gunicorn
