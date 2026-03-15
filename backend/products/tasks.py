@@ -1,18 +1,16 @@
 import logging
-from celery import shared_task
 from django.core.mail import send_mail
 from django.conf import settings
-from django.utils import timezone
 from .models import Product, PriceHistory
 from .scraper import get_mercadolibre_data
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task
 def scrape_product_price(product_id):
     """
-    Obtiene el precio, guarda el historial y notifica si hay oferta.
+    Obtiene el precio de un producto, guarda el historial y notifica si hay oferta.
+    Función pura (sin Celery), llamada directamente por el scheduler.
     """
     try:
         product = Product.objects.get(id=product_id)
@@ -38,10 +36,6 @@ def scrape_product_price(product_id):
             price_before_float = float(price_before) if price_before is not None else None
 
             if current <= target:
-                # Enviar alerta si:
-                # 1. Es la primera vez (price_before_float es None)
-                # 2. El precio venía por encima del objetivo y ahora bajó (cruce del umbral)
-                # 3. El precio cambió a un valor diferente y sigue cumpliendo el objetivo
                 should_notify = (
                     price_before_float is None
                     or price_before_float > target
@@ -51,9 +45,7 @@ def scrape_product_price(product_id):
                     logger.info(f"[ALERTA] {product.name} — precio {current} cumple objetivo {target} (anterior: {price_before_float})")
                     send_alert_email(product)
         else:
-            # Sin precio: usar el campo 'available' del scraper para distinguir
-            # entre error técnico (available=True) y sin stock real (available=False)
-            scraper_available = data.get('available', True)  # default=True = error de scraper, no sin stock
+            scraper_available = data.get('available', True)
             product.is_available = scraper_available
             if data.get('name') and not data['name'].startswith('Error:'):
                 if not product.name or product.name == "Procesando...":
@@ -203,12 +195,14 @@ def send_alert_email(product):
         logger.exception(f"[EMAIL] Error al enviar alerta para {product.name}: {e}")
 
 
-@shared_task
 def update_all_products_prices():
     """
-    Tarea periódica que actualiza precios de todos los productos activos.
+    Itera todos los productos activos y actualiza sus precios.
+    Ejecutada automáticamente cada hora por APScheduler.
     """
     active_products = Product.objects.filter(deleted_at__isnull=True)
-    logger.info(f"[SCRAPER] Iniciando actualización masiva de {active_products.count()} productos")
+    total = active_products.count()
+    logger.info(f"[Scheduler] Iniciando actualización de {total} productos activos")
     for product in active_products:
-        scrape_product_price.delay(product.id)
+        scrape_product_price(product.id)
+    logger.info(f"[Scheduler] Actualización finalizada para {total} productos")
