@@ -424,7 +424,18 @@ def get_mercadolibre_data(url):
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--single-process",
+                "--no-zygote",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--mute-audio",
+                "--no-first-run",
+            ]
         )
         context = browser.new_context(
             locale="es-AR",
