@@ -446,6 +446,16 @@ def get_mercadolibre_data(url):
             )
         )
         page = context.new_page()
+
+        # Bloquear recursos innecesarios para reducir consumo de RAM y acelerar scraping
+        def block_resources(route):
+            if route.request.resource_type in ["image", "media", "font"]:
+                route.abort()
+            else:
+                route.continue_()
+
+        page.route("**/*", block_resources)
+
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
@@ -501,7 +511,6 @@ def get_mercadolibre_data(url):
                     if val:
                         logger.debug(f"[SCRAPER] Amazon precio por regex span: {val}")
                         return {"name": name, "price": val}
-
 
             result = scrape_store(page, url)
             return result
