@@ -1,5 +1,4 @@
 import logging
-from celery import shared_task
 from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
@@ -9,7 +8,6 @@ from .scraper import get_mercadolibre_data
 logger = logging.getLogger(__name__)
 
 
-@shared_task
 def scrape_product_price(product_id):
     """
     Obtiene el precio, guarda el historial y notifica si hay oferta.
@@ -154,7 +152,7 @@ def send_alert_email(product):
                     <td align="center">
                       <a href="{product.url}" target="_blank"
                          style="display:inline-block;background:linear-gradient(135deg,#1a73e8,#0d47a1);color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:16px 40px;border-radius:14px;letter-spacing:0.3px;">
-                        🛍️ Ver producto y comprar
+                         🛍️ Ver producto y comprar
                       </a>
                     </td>
                   </tr>
@@ -203,7 +201,6 @@ def send_alert_email(product):
         logger.exception(f"[EMAIL] Error al enviar alerta para {product.name}: {e}")
 
 
-@shared_task
 def update_all_products_prices():
     """
     Tarea periódica que actualiza precios de todos los productos activos.
@@ -211,4 +208,4 @@ def update_all_products_prices():
     active_products = Product.objects.filter(deleted_at__isnull=True)
     logger.info(f"[SCRAPER] Iniciando actualización masiva de {active_products.count()} productos")
     for product in active_products:
-        scrape_product_price.delay(product.id)
+        scrape_product_price(product.id)

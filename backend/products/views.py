@@ -61,7 +61,8 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         product = serializer.save(user=self.request.user)
-        scrape_product_price.delay(product.id)
+        import threading
+        threading.Thread(target=scrape_product_price, args=(product.id,), daemon=True).start()
 
     def perform_destroy(self, instance):
         # Soft Delete
