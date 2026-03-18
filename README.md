@@ -3,7 +3,7 @@
 Aplicación full-stack para el monitoreo automático de precios en sitios de e-commerce. Los usuarios registran productos desde sitios soportados o cualquier URL genérica, y el sistema realiza scraping automático cada hora para registrar el historial de precios y detectar variaciones.
 
 🌐 **Demo en vivo:** [monitor-precios-one.vercel.app](https://monitor-precios-one.vercel.app)
-🔌 **API:** [price-tracker-api.onrender.com](https://price-tracker-api.onrender.com)
+🔌 **API:** [monitor-precios.onrender.com](https://monitor-precios.onrender.com)
 
 ---
 
@@ -11,8 +11,8 @@ Aplicación full-stack para el monitoreo automático de precios en sitios de e-c
 
 - **Monitoreo automático cada hora** — APScheduler dispara el scraping en background dentro del mismo proceso Django
 - **Multi-sitio** — Soporte para sitios populares con selectores optimizados y modo genérico para cualquier URL
-- **Scraping con navegador real** — Playwright maneja sitios con JavaScript dinámico que BeautifulSoup no puede procesar
 - **Historial de precios** — Registro completo de variaciones de precio a lo largo del tiempo por producto
+- **Alertas por email** — Notificación automática cuando un producto alcanza el precio objetivo
 - **Multi-usuario** — Cada usuario autenticado gestiona y visualiza únicamente sus propios productos
 - **Autenticación JWT** — Registro, login y protección de endpoints con access/refresh tokens
 - **Soft delete** — Los productos eliminados se marcan como inactivos preservando su historial
@@ -29,9 +29,11 @@ Aplicación full-stack para el monitoreo automático de precios en sitios de e-c
 | **Frontend** | React, TypeScript, Vite |
 | **Styling** | Tailwind CSS |
 | **Base de datos** | PostgreSQL (Supabase en producción) |
-| **Scraping** | BeautifulSoup4, Requests, Playwright, lxml |
+| **Scraping** | BeautifulSoup4, Requests, lxml |
 | **Archivos estáticos** | WhiteNoise |
 | **Containerización** | Docker, Docker Compose (desarrollo local) |
+
+> **Nota sobre scraping:** La versión en producción usa `requests` + `BeautifulSoup` para compatibilidad con el free tier de Render. La versión local con Docker incluye soporte completo para **Playwright** (scraping con navegador real para sitios con JavaScript dinámico como CompraGamer y Amazon).
 
 ---
 
@@ -46,7 +48,7 @@ price-tracker/
 │   │   └── wsgi.py
 │   ├── products/
 │   │   ├── models.py          # Product, PriceHistory
-│   │   ├── scraper.py         # Lógica de scraping (sitios soportados + genérico)
+│   │   ├── scraper.py         # Lógica de scraping
 │   │   ├── tasks.py           # Función de scraping periódico
 │   │   ├── apps.py            # Registro del scheduler al arrancar Django
 │   │   ├── views.py           # API endpoints (CRUD + historial)
@@ -70,12 +72,14 @@ price-tracker/
 │   ├── vercel.json            # Rewrites para React Router en Vercel
 │   ├── vite.config.ts
 │   └── package.json
-└── docker-compose.yml         # Entorno de desarrollo local
+└── docker-compose.yml         # Entorno de desarrollo local completo
 ```
 
 ---
 
-## ⚙️ Setup Local con Docker
+## ⚙️ Setup Local con Docker (versión completa con Playwright)
+
+La versión local incluye Playwright para scraping completo, Celery para procesamiento asíncrono distribuido y Redis como broker de mensajes.
 
 ### Prerrequisitos
 
@@ -85,8 +89,8 @@ price-tracker/
 ### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/EnzoL1016/price-tracker.git
-cd price-tracker
+git clone https://github.com/EnzoL1016/Monitor-Precios.git
+cd Monitor-Precios
 ```
 
 ### 2. Configurar variables de entorno
@@ -106,8 +110,15 @@ DB_PASSWORD=postgres
 DB_HOST=db
 DB_PORT=5432
 
+# Redis / Celery
+REDIS_URL=redis://redis:6379/0
+
 # CORS
 CORS_ALLOWED_ORIGINS=http://localhost:5173
+
+# Email (opcional para alertas locales)
+EMAIL_HOST_USER=tu@gmail.com
+EMAIL_HOST_PASSWORD=tu_app_password
 ```
 
 ### 3. Levantar los servicios
@@ -118,11 +129,14 @@ docker-compose up --build
 
 Esto levanta simultáneamente:
 
-| Servicio | URL |
-|----------|-----|
+| Servicio | URL / Puerto |
+|----------|-------------|
 | Backend (Django) | `http://localhost:8000` |
 | Frontend (React) | `http://localhost:5173` |
 | PostgreSQL | puerto `5432` |
+| Redis | puerto `6379` |
+| Celery Worker | — |
+| Celery Beat | — |
 
 ### 4. Migraciones y superusuario
 
@@ -137,6 +151,8 @@ docker-compose exec backend python manage.py createsuperuser
 docker-compose exec backend playwright install chromium
 ```
 
+Con Playwright instalado el scraper usa un navegador real para sitios con JavaScript dinámico (CompraGamer, Amazon, etc.), logrando cobertura completa de sitios.
+
 ---
 
 ## 🔌 API Endpoints
@@ -148,26 +164,34 @@ Authorization: Bearer <access_token>
 
 | Método | Endpoint | Descripción | Auth |
 |--------|----------|-------------|------|
-| `POST` | `/api/auth/register/` | Registro de usuario | ❌ |
-| `POST` | `/api/auth/login/` | Login, retorna access + refresh token | ❌ |
-| `POST` | `/api/auth/refresh/` | Renueva el access token | ❌ |
-| `GET` | `/api/products/` | Lista los productos del usuario autenticado | ✅ |
-| `POST` | `/api/products/` | Agrega un nuevo producto a monitorear | ✅ |
-| `GET` | `/api/products/{id}/` | Detalle de un producto | ✅ |
-| `DELETE` | `/api/products/{id}/` | Soft delete del producto | ✅ |
-| `GET` | `/api/products/{id}/history/` | Historial completo de precios | ✅ |
+| `POST` | `/api/register/` | Registro de usuario | ❌ |
+| `POST` | `/api/token/` | Login, retorna access + refresh token | ❌ |
+| `POST` | `/api/token/refresh/` | Renueva el access token | ❌ |
+| `GET` | `/api/items/` | Lista los productos del usuario autenticado | ✅ |
+| `POST` | `/api/items/` | Agrega un nuevo producto a monitorear | ✅ |
+| `GET` | `/api/items/{id}/` | Detalle de un producto | ✅ |
+| `DELETE` | `/api/items/{id}/` | Soft delete del producto | ✅ |
+| `GET` | `/api/items/trash/` | Lista productos eliminados | ✅ |
+| `POST` | `/api/items/{id}/restore/` | Restaura un producto de la papelera | ✅ |
+| `DELETE` | `/api/items/{id}/hard_delete/` | Eliminación permanente | ✅ |
 
 ---
 
 ## 🤖 Cómo funciona el scraping
 
-El módulo `scraper.py` opera en dos modos:
+El módulo `scraper.py` tiene dos estrategias según el entorno:
 
-**Sitios soportados:** Selectores CSS específicos y optimizados para la estructura HTML de cada sitio (MercadoLibre y otros). Más rápido y confiable.
+**Producción (requests + BeautifulSoup):** Obtiene el HTML directamente con `requests` y lo parsea con `BeautifulSoup`. Funciona para sitios cuyo precio está en el HTML inicial: MercadoLibre, Fravega, Maximus, y cualquier sitio con datos estructurados JSON-LD o meta tags de precio.
 
-**URL genérica:** Heurística de detección de precio sobre el DOM parseado: busca patrones numéricos con formato monetario en elementos `<span>`, `<p>` y `<meta>`. Para sitios con JavaScript dinámico, Playwright renderiza la página completa antes del análisis.
+**Local con Docker (Playwright):** Para sitios que renderizan precios con JavaScript (CompraGamer, Amazon), Playwright lanza un navegador real que ejecuta el JS antes del parsing.
 
-APScheduler registra el job al arrancar Django vía `apps.py`, y lo ejecuta **cada hora** dentro del mismo proceso. Itera todos los productos activos y registra un nuevo `PriceHistory` solo si el precio cambió respecto al último registro.
+En ambos casos el scraper aplica la siguiente cadena de prioridades para encontrar el precio:
+1. Selectores específicos por sitio (MercadoLibre, CompraGamer, Maximus)
+2. Datos estructurados JSON-LD (`application/ld+json`)
+3. Meta tags de precio (`og:price:amount`, `itemprop="price"`, etc.)
+4. Heurística sobre selectores CSS genéricos de precio
+
+APScheduler registra el job al arrancar Django vía `apps.py` y lo ejecuta **cada hora** dentro del mismo proceso. Itera todos los productos activos y registra un nuevo `PriceHistory` solo si el precio cambió. Si el precio alcanza el objetivo del usuario, dispara una **alerta por email**.
 
 ---
 
@@ -179,12 +203,14 @@ Product
 ├── name            CharField
 ├── url             URLField
 ├── current_price   DecimalField
+├── target_price    DecimalField
+├── is_available    BooleanField
 ├── created_at      DateTimeField
 └── deleted_at      DateTimeField (null = activo)
 
 PriceHistory
 ├── product         FK → Product
-├── price           DecimalField
+├── captured_price  DecimalField
 └── recorded_at     DateTimeField
 ```
 
@@ -197,3 +223,22 @@ PriceHistory
 | Frontend | Vercel | Deploy automático desde `main` |
 | API Django + Scheduler | Render (Web Service) | Build via `build.sh`, scheduler embebido |
 | PostgreSQL | Supabase | Session Pooler (IPv4, puerto 5432) |
+
+### Variables de entorno en producción (Render)
+
+| Variable | Descripción |
+|----------|-------------|
+| `SECRET_KEY` | Generada por Render |
+| `DEBUG` | `False` |
+| `ALLOWED_HOSTS` | `.onrender.com` |
+| `DATABASE_URL` | Connection string de Supabase (Session Pooler) |
+| `CORS_ALLOWED_ORIGINS` | URL de Vercel sin barra final |
+| `EMAIL_HOST_USER` | Cuenta Gmail para alertas |
+| `EMAIL_HOST_PASSWORD` | App password de Gmail |
+
+### Variable de entorno en producción (Vercel)
+
+| Variable | Valor |
+|----------|-------|
+| `VITE_API_BASE_URL` | `https://monitor-precios.onrender.com/api` |
+
