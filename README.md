@@ -9,7 +9,7 @@ Aplicación full-stack para el monitoreo automático de precios en sitios de e-c
 
 ## ✨ Features
 
-- **Monitoreo automático cada hora** — APScheduler dispara el scraping en background dentro del mismo proceso Django
+- **Monitoreo automático cada hora** — Celery Beat dispara el scraping en background sin intervención del usuario
 - **Multi-sitio** — Soporte para sitios populares con selectores optimizados y modo genérico para cualquier URL
 - **Scraping con navegador real** — Playwright maneja sitios con JavaScript dinámico que BeautifulSoup no puede procesar
 - **Historial de precios** — Registro completo de variaciones de precio a lo largo del tiempo por producto
@@ -25,7 +25,7 @@ Aplicación full-stack para el monitoreo automático de precios en sitios de e-c
 |------|-----------|
 | **Backend** | Django 4.2, Django REST Framework |
 | **Autenticación** | djangorestframework-simplejwt |
-| **Scheduler** | APScheduler + django-apscheduler |
+| **Task Queue** | Celery 5.3 + Redis |
 | **Frontend** | React, TypeScript, Vite |
 | **Styling** | Tailwind CSS |
 | **Base de datos** | PostgreSQL (Supabase en producción) |
@@ -43,12 +43,12 @@ price-tracker/
 │   ├── core/
 │   │   ├── settings.py        # Configuración Django
 │   │   ├── urls.py            # Rutas raíz
+│   │   ├── celery.py          # Configuración Celery + Beat scheduler
 │   │   └── wsgi.py
 │   ├── products/
 │   │   ├── models.py          # Product, PriceHistory
 │   │   ├── scraper.py         # Lógica de scraping (sitios soportados + genérico)
-│   │   ├── tasks.py           # Función de scraping periódico
-│   │   ├── apps.py            # Registro del scheduler al arrancar Django
+│   │   ├── tasks.py           # Tarea Celery: scraping periódico cada hora
 │   │   ├── views.py           # API endpoints (CRUD + historial)
 │   │   ├── serializers.py
 │   │   ├── urls.py
@@ -106,6 +106,9 @@ DB_PASSWORD=postgres
 DB_HOST=db
 DB_PORT=5432
 
+# Redis / Celery
+REDIS_URL=redis://redis:6379/0
+
 # CORS
 CORS_ALLOWED_ORIGINS=http://localhost:5173
 ```
@@ -123,6 +126,9 @@ Esto levanta simultáneamente:
 | Backend (Django) | `http://localhost:8000` |
 | Frontend (React) | `http://localhost:5173` |
 | PostgreSQL | puerto `5432` |
+| Redis | puerto `6379` |
+| Celery Worker | — |
+| Celery Beat | — |
 
 ### 4. Migraciones y superusuario
 
@@ -167,7 +173,7 @@ El módulo `scraper.py` opera en dos modos:
 
 **URL genérica:** Heurística de detección de precio sobre el DOM parseado: busca patrones numéricos con formato monetario en elementos `<span>`, `<p>` y `<meta>`. Para sitios con JavaScript dinámico, Playwright renderiza la página completa antes del análisis.
 
-APScheduler registra el job al arrancar Django vía `apps.py`, y lo ejecuta **cada hora** dentro del mismo proceso. Itera todos los productos activos y registra un nuevo `PriceHistory` solo si el precio cambió respecto al último registro.
+La tarea Celery se ejecuta **cada hora** vía `celery-beat`, itera todos los productos activos de todos los usuarios, y registra un nuevo `PriceHistory` solo si el precio cambió respecto al último registro.
 
 ---
 
@@ -195,5 +201,11 @@ PriceHistory
 | Servicio | Plataforma | Detalle |
 |----------|-----------|---------|
 | Frontend | Vercel | Deploy automático desde `main` |
-| API Django + Scheduler | Render (Web Service) | Build via `build.sh`, scheduler embebido |
+| API Django | Render (Web Service) | Build via `build.sh` |
+| Celery Worker | Render (Background Worker) | `concurrency=1` en free tier |
+| Celery Beat | Render (Background Worker) | Scheduler cada hora |
 | PostgreSQL | Supabase | Session Pooler (IPv4, puerto 5432) |
+| Redis | Upstash | Free tier, 10k comandos/día |
+
+### Proyecto actualmente en producción:
+https://monitor-precios-one.vercel.app/

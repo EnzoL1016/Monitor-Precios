@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import api from '../services/api';
+import axios from 'axios';
 import { LogIn, UserPlus, Loader2, AlertCircle, Check } from 'lucide-react';
 
 interface LoginProps {
     onLoginSuccess: () => void;
 }
 
-
+const API_URL = 'http://localhost:8000/api/';
 
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -40,7 +40,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         setLoading(true);
         setError('');
         try {
-            const response = await api.post('token/', { username, password });
+            const response = await axios.post(`${API_URL}token/`, { username, password });
             localStorage.setItem('access_token', response.data.access);
             localStorage.setItem('refresh_token', response.data.refresh);
             onLoginSuccess();
@@ -57,13 +57,13 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         setError('');
         setSuccessMsg('');
         try {
-            await api.post('register/', {
+            await axios.post(`${API_URL}register/`, {
                 username: regUsername,
                 email: regEmail,
                 password: regPassword,
             });
             // Loguear automáticamente tras registrar
-            const tokenRes = await api.post('token/', {
+            const tokenRes = await axios.post(`${API_URL}token/`, {
                 username: regUsername,
                 password: regPassword,
             });
