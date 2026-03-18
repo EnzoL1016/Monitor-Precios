@@ -4,9 +4,9 @@ djangorestframework
 django-cors-headers
 djangorestframework-simplejwt
 
-# --- Procesamiento Asíncrono (scheduler embebido, sin workers externos) ---
-apscheduler>=3.10.0
-django-apscheduler>=0.6.2
+# --- Procesamiento Asíncrono ---
+celery>=5.3.0
+redis>=5.0.0
 
 # --- Base de Datos ---
 psycopg2-binary
