@@ -1,21 +1,25 @@
 import re
 import logging
 import json
+import requests
 from urllib.parse import urlparse
-from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-# -----------------------------
-# Selectores específicos de sin stock por sitio
-# (solo se buscan dentro de contenedores de compra, NO en todo el HTML)
-# -----------------------------
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "es-AR,es;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
 OUT_OF_STOCK_SELECTORS = [
-    # Mercado Libre
-    ".ui-pdp-stock-information",        # contenedor de stock específico de ML
+    ".ui-pdp-stock-information",
     "[data-testid='stock-information']",
-    # Genéricos
     ".stock-unavailable",
     ".out-of-stock",
     "[class*='out-of-stock']",
@@ -24,53 +28,44 @@ OUT_OF_STOCK_SELECTORS = [
     ".product-unavailable",
 ]
 
-# Frases de sin stock: SOLO se usan para validar el texto de los selectores anteriores,
-# nunca sobre el HTML completo.
 OUT_OF_STOCK_PHRASES = [
     "sin stock", "sin existencias", "agotado", "out of stock",
     "temporalmente sin stock", "no tenemos stock", "fuera de stock",
     "producto no disponible", "este producto no está disponible",
 ]
 
-def check_out_of_stock_targeted(page) -> bool:
-    """
-    Verifica sin stock ÚNICAMENTE en elementos específicos relacionados a compra/stock.
-    NO escanea el HTML completo (evita falsos positivos en filtros, footer, etc.).
-    """
+def check_out_of_stock_targeted(soup) -> bool:
     try:
-        # Intentar selectores específicos de sin stock
         for sel in OUT_OF_STOCK_SELECTORS:
-            el = page.query_selector(sel)
+            el = soup.select_one(sel)
             if el:
-                text = el.inner_text().strip().lower()
+                text = el.get_text(" ", strip=True).lower()
                 if any(phrase in text for phrase in OUT_OF_STOCK_PHRASES):
                     logger.info(f"[SCRAPER] Sin stock detectado en selector '{sel}': {text[:80]}")
                     return True
 
-        # Verificar ausencia de botón de compra como señal secundaria
         buy_selectors = [
             "button[data-testid*='buy']",
-            ".andes-button--filled",         # ML
+            ".andes-button--filled",
             "[class*='buy']",
             "[data-testid*='add-to-cart']",
             ".add-to-cart",
             "button[class*='comprar']",
             "button[class*='agregar']",
         ]
-        has_buy_button = any(page.query_selector(sel) for sel in buy_selectors)
+        has_buy_button = any(soup.select_one(sel) for sel in buy_selectors)
 
-        # Buscar solo en el contenedor principal del producto (no footer ni sidebar)
         main_selectors = [
-            ".ui-pdp-container",       # Mercado Libre
-            "#productInfo",            # tiendas genéricas
+            ".ui-pdp-container",
+            "#productInfo",
             ".product-detail",
             ".product-info",
             "[data-component='product-page']",
         ]
         for main_sel in main_selectors:
-            main_el = page.query_selector(main_sel)
+            main_el = soup.select_one(main_sel)
             if main_el:
-                text = main_el.inner_text().lower()
+                text = main_el.get_text(" ", strip=True).lower()
                 if any(phrase in text for phrase in OUT_OF_STOCK_PHRASES) and not has_buy_button:
                     logger.info(f"[SCRAPER] Sin stock detectado en contenedor principal '{main_sel}'")
                     return True
@@ -80,9 +75,6 @@ def check_out_of_stock_targeted(page) -> bool:
 
     return False
 
-# -----------------------------
-# Normalización y parsing numérico
-# -----------------------------
 def normalize_number_string(s: str) -> str:
     s = s.strip()
     has_comma = "," in s
@@ -123,9 +115,6 @@ def extract_price_from_text(text):
             return val
     return None
 
-# -----------------------------
-# Utilidades comunes
-# -----------------------------
 def clean_title(soup):
     h1 = soup.find("h1")
     if h1:
@@ -239,15 +228,18 @@ def collect_selector_candidates(soup):
                 cands.append({"value": val, "currency": None, "source": f"selector:{sel}"})
     return cands
 
-# -----------------------------
-# Función general
-# -----------------------------
-def scrape_store(page, url):
-    domain = urlparse(url).netloc.lower()
-    page.wait_for_load_state("domcontentloaded")
-    page.wait_for_timeout(1500)
+def fetch_html(url: str):
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=20)
+        response.raise_for_status()
+        return response.text
+    except Exception as e:
+        logger.warning(f"[SCRAPER] Error al hacer fetch de {url}: {e}")
+        return None
 
-    # --- Nombre del producto ---
+def scrape_store(soup, url):
+    domain = urlparse(url).netloc.lower()
+
     name = None
     try:
         name_selectors = [
@@ -263,14 +255,9 @@ def scrape_store(page, url):
             ".product-name",
         ]
         for selector in name_selectors:
-            if "product-details__info__title" in selector:
-                try:
-                    page.wait_for_selector(selector, timeout=4000)
-                except:
-                    pass
-            element = page.query_selector(selector)
+            element = soup.select_one(selector)
             if element:
-                raw_name = element.inner_text().strip()
+                raw_name = element.get_text(" ", strip=True)
                 if raw_name and raw_name.upper() != "COMPRA GAMER":
                     name = raw_name
                     if "content_copy" in name:
@@ -280,14 +267,8 @@ def scrape_store(page, url):
     except Exception as e:
         logger.debug(f"[SCRAPER] Error capturando nombre en {domain}: {e}")
 
-    html = page.content()
-    soup = BeautifulSoup(html, "html.parser")
-
     if not name or name.upper() == "COMPRA GAMER":
         name = clean_title(soup)
-        logger.debug(f"[SCRAPER] Nombre por fallback: {name[:60]}")
-
-    # --- Captura de precios por handlers específicos ---
 
     # Mercado Libre
     if "mercadolibre" in domain:
@@ -298,13 +279,9 @@ def scrape_store(page, url):
                 "span.andes-money-amount__fraction",
             ]
             for sel in selectors_ml:
-                try:
-                    page.wait_for_selector(sel, timeout=2000)
-                except:
-                    pass
-                element = page.query_selector(sel)
+                element = soup.select_one(sel)
                 if element:
-                    text = element.inner_text().strip()
+                    text = element.get_text(" ", strip=True)
                     val = extract_price_from_text(text)
                     if val:
                         logger.debug(f"[SCRAPER] Precio ML con '{sel}': {val}")
@@ -315,22 +292,13 @@ def scrape_store(page, url):
     # Compra Gamer
     if "compragamer" in domain:
         try:
-            selectors_cg = [
-                "span[class*='text-price']:not([class*='underline'])",
-                ".cv-price span[class*='text-price']",
-                ".price span[class*='text-price']",
-            ]
-            for sel in selectors_cg:
-                try:
-                    page.wait_for_selector(sel, timeout=5000)
-                except:
-                    pass
-                elements = page.query_selector_all(sel)
+            for sel in ["span[class*='text-price']", ".cv-price span", ".price span"]:
+                elements = soup.select(sel)
                 for element in elements:
-                    text = element.inner_text().strip()
-                    parent_class = element.evaluate("el => el.parentElement.className")
-                    if "underline" in str(parent_class):
+                    classes = " ".join(element.get("class", []))
+                    if "underline" in classes:
                         continue
+                    text = element.get_text(" ", strip=True)
                     val = extract_price_from_text(text)
                     if val and val > 1000:
                         logger.debug(f"[SCRAPER] Precio CG con '{sel}': {val}")
@@ -341,29 +309,21 @@ def scrape_store(page, url):
     # Maximus
     if "maximus" in domain:
         try:
-            selectors_max = [
-                "[itemprop='price']",               # Schema.org (más fiable)
-                "div.itemBox--price-lg span.value-item--full-price",
-                ".price-main .price-especial",
-                ".precio-especial",
-                "[class*='price-transfer']",
-            ]
-            for sel in selectors_max:
-                element = page.query_selector(sel)
+            for sel in ["[itemprop='price']", "div.itemBox--price-lg span.value-item--full-price",
+                        ".price-main .price-especial", ".precio-especial", "[class*='price-transfer']"]:
+                element = soup.select_one(sel)
                 if element:
-                    # Para itemprop=price, leer el atributo content
-                    content_val = element.get_attribute("content")
+                    content_val = element.get("content")
                     if content_val:
                         val = to_float(content_val)
                     else:
-                        val = extract_price_from_text(element.inner_text().strip())
+                        val = extract_price_from_text(element.get_text(" ", strip=True))
                     if val:
                         logger.debug(f"[SCRAPER] Precio Maximus con '{sel}': {val}")
                         return {"name": name, "price": val}
         except Exception as e:
             logger.debug(f"[SCRAPER] Error precio Maximus: {e}")
 
-    # --- Para el resto: recolectar candidatos de metadatos y selectores ---
     candidate_lists = [
         collect_json_ld_candidates(soup),
         collect_meta_candidates(soup),
@@ -373,7 +333,6 @@ def scrape_store(page, url):
     for lst in candidate_lists:
         candidates.extend(lst)
 
-    # Filtrar USD en dominios locales
     filtered = []
     for c in candidates:
         cur = c.get("currency")
@@ -385,14 +344,11 @@ def scrape_store(page, url):
     if not filtered:
         filtered = candidates
 
-    # Prioridad a metadatos
     meta_candidates = [c for c in filtered if c.get("source") in ["jsonld", "meta"]]
     if meta_candidates:
         best_meta = max(meta_candidates, key=lambda x: x["value"])
-        logger.debug(f"[SCRAPER] {domain} por metadatos: {best_meta}")
         return {"name": name, "price": best_meta["value"]}
 
-    # Fallback: selectores visuales
     ars = [c for c in filtered if c.get("currency") == "ARS"]
     pool = ars if ars else filtered
 
@@ -403,8 +359,7 @@ def scrape_store(page, url):
     pool = [c for c in pool if c["value"] and c["value"] >= min_val] or pool
 
     if not pool:
-        # NO se pudo extraer ningún precio: ahora SÍ verificamos sin stock de forma quirúrgica
-        out_of_stock = check_out_of_stock_targeted(page)
+        out_of_stock = check_out_of_stock_targeted(soup)
         logger.info(f"[SCRAPER] Sin precio en {domain}, sin stock detectado: {out_of_stock}")
         return {"name": name, "price": None, "available": not out_of_stock}
 
@@ -421,85 +376,50 @@ def scrape_store(page, url):
 # Entrypoint
 # -----------------------------
 def get_mercadolibre_data(url):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
-        context = browser.new_context(
-            locale="es-AR",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+    try:
+        domain = urlparse(url).netloc.lower()
+        html = fetch_html(url)
+
+        if not html:
+            return {"name": "Error: no se pudo obtener la página", "price": None}
+
+        soup = BeautifulSoup(html, "lxml")
+
+        # Amazon
+        if "amazon" in domain:
+            name = clean_title(soup)
+
+            for sel in [".priceToPay .a-offscreen", "#corePrice_desktop .a-offscreen",
+                        "#corePrice_feature_div .a-offscreen",
+                        ".a-price[data-a-color='price'] .a-offscreen"]:
+                el = soup.select_one(sel)
+                if el:
+                    val = extract_price_from_text(el.get_text(" ", strip=True))
+                    if val:
+                        return {"name": name, "price": val}
+
+            m = re.search(
+                r'"priceToPay"\s*:\s*\{[^}]{0,300}"amount"\s*:\s*"?([\d.,]+)"?',
+                html, flags=re.IGNORECASE
             )
-        )
-        page = context.new_page()
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            if m:
+                val = to_float(m.group(1))
+                if val:
+                    return {"name": name, "price": val}
 
-            domain = urlparse(url).netloc.lower()
+            m2 = re.search(
+                r'<span[^>]*data-a-color="price"[^>]*>\s*<span[^>]*class="a-offscreen"[^>]*>([^<]+)</span>',
+                html, flags=re.IGNORECASE
+            )
+            if m2:
+                val = extract_price_from_text(m2.group(1))
+                if val:
+                    return {"name": name, "price": val}
 
-            # --- Amazon: estrategia multi-nivel ---
-            if "amazon" in domain:
-                html = page.content()
-                soup = BeautifulSoup(html, "html.parser")
-                name = clean_title(soup)
+            return {"name": name, "price": None}
 
-                # 1) Selector DOM directo: .priceToPay es el bloque del precio de contado del producto
-                #    Es más confiable que la regex porque Amazon puede tener multiple `.a-price` en la página
-                amazon_selectors = [
-                    ".priceToPay .a-offscreen",             # precio contado principal
-                    "#corePrice_desktop .a-offscreen",      # precio en desktop
-                    "#corePrice_feature_div .a-offscreen",  # feature div
-                    ".a-price[data-a-color='price'] .a-offscreen",  # precio destacado
-                ]
-                for sel in amazon_selectors:
-                    try:
-                        page.wait_for_selector(sel, timeout=2000)
-                    except:
-                        pass
-                    el = page.query_selector(sel)
-                    if el:
-                        text = el.inner_text().strip()
-                        val = extract_price_from_text(text)
-                        if val:
-                            logger.debug(f"[SCRAPER] Amazon precio con selector '{sel}': {val}")
-                            return {"name": name, "price": val}
+        return scrape_store(soup, url)
 
-                # 2) Regex acotada en el JSON embebido: busca "priceToPay" y toma el primer
-                #    "amount" (valor numérico) dentro del mismo bloque de ~300 chars.
-                #    Evita DOTALL ilimitado que cruzaba objetos de importación/envío.
-                m = re.search(
-                    r'"priceToPay"\s*:\s*\{[^}]{0,300}"amount"\s*:\s*"?([\d.,]+)"?',
-                    html, flags=re.IGNORECASE
-                )
-                if m:
-                    val = to_float(m.group(1))
-                    if val:
-                        logger.debug(f"[SCRAPER] Amazon precio por regex JSON amount: {val}")
-                        return {"name": name, "price": val}
-
-                # 3) Regex del span de precio visible (data-a-color="price")
-                m2 = re.search(
-                    r'<span[^>]*data-a-color="price"[^>]*>\s*<span[^>]*class="a-offscreen"[^>]*>([^<]+)</span>',
-                    html, flags=re.IGNORECASE
-                )
-                if m2:
-                    val = extract_price_from_text(m2.group(1))
-                    if val:
-                        logger.debug(f"[SCRAPER] Amazon precio por regex span: {val}")
-                        return {"name": name, "price": val}
-
-
-            result = scrape_store(page, url)
-            return result
-
-        except Exception as e:
-            logger.exception(f"[SCRAPER] Error en {url}: {e}")
-            return {"name": f"Error: {str(e)[:80]}", "price": None}
-        finally:
-            try:
-                browser.close()
-            except:
-                pass
+    except Exception as e:
+        logger.exception(f"[SCRAPER] Error en {url}: {e}")
+        return {"name": f"Error: {str(e)[:80]}", "price": None}
