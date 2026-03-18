@@ -10,6 +10,10 @@ redis>=5.0.0
 
 # --- Base de Datos ---
 psycopg2-binary
+dj-database-url
+
+# --- Archivos Estáticos (producción) ---
+whitenoise
 
 # --- Scraping ---
 requests
