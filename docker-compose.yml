@@ -1,0 +1,88 @@
+version: '3.8'
+
+x-common-env: &common-env
+  REDIS_URL: redis://redis:6379/0
+  DEBUG: "1"
+  PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+  DB_NAME: pricetracker
+  DB_USER: postgres
+  DB_PASSWORD: postgres
+  DB_HOST: db
+  DB_PORT: "5432"
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    env_file:
+      - ./backend/.env
+    environment:
+      POSTGRES_DB: pricetracker
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build: ./backend
+    env_file:
+      - ./backend/.env
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment: *common-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    env_file:
+      - ./backend/.env
+    command: celery -A core worker -l info
+    volumes:
+      - ./backend:/app
+      - playwright_browsers:/ms-playwright
+    environment: *common-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_beat:
+    build: ./backend
+    env_file:
+      - ./backend/.env
+    command: celery -A core beat -l info
+    volumes:
+      - ./backend:/app
+    environment: *common-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  playwright_browsers:
